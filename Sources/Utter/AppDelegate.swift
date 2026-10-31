@@ -26,6 +26,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
             return
         }
+        if let i = args.firstIndex(of: "--capture-hud"), i + 1 < args.count { // the pill, recorded off screen
+            HUDCapture.run(to: args[i + 1])
+            exit(0)
+        }
         if let i = args.firstIndex(of: "--make-icons"), i + 1 < args.count {
             Logo.writeFiles(to: args[i + 1])
             exit(0)

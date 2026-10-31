@@ -113,11 +113,11 @@ final class Controller {
         case (.holding, .holdTapped):
             // A key combination pressed and let go quickly: keep listening, hands-free.
             phase = .handsFree
-            hud.set(.handsFree(finishHint))
+            hud.set(.handsFree)
             log("#\(session?.id ?? 0) hands-free")
         case (.holding, .holdInterrupted):
             // The key turned out to be part of a shortcut: drop the recording quietly.
-            cancel(message: nil)
+            cancel(notice: nil)
         case (.handsFree, .finish), (.handsFree, .holdEnded), (.handsFree, .handsFree), (.handsFree, .holdBegan):
             handsFreeEnded = Date()
             end()
@@ -127,7 +127,6 @@ final class Controller {
     }
 
     /// How to finish hands-free: the key that started it.
-    private var finishHint: String { session?.hotkey.map(Hotkey.finishHint) ?? "Esc cancels" }
 
     // MARK: Mic from key-down
 
@@ -159,7 +158,7 @@ final class Controller {
                     self.log("mic start failed: \(error)")
                     guard self.feed === f else { return }
                     self.feed = nil
-                    if self.session != nil { self.cancel(message: "Microphone unavailable") }
+                    if self.session != nil { self.cancel(notice: .micUnavailable) }
                 }
             }
         }
@@ -173,7 +172,7 @@ final class Controller {
     // MARK: Dictation
 
     private func begin(handsFree: Bool, mode: Mode, hotkey: Hotkey?) {
-        guard let tx = transcriber else { hud.set(.message("Add your OpenRouter key in Settings")); return }
+        guard let tx = transcriber else { hud.set(.notice(.needsKey)); return }
         tx.warmIfIdle(10)
         tx.vocabulary = Vocabulary.load()
         tx.systemPrompt = Settings.systemPrompt
@@ -189,7 +188,7 @@ final class Controller {
                 do { try source.start { pipeline.append($0) } } catch {
                     DispatchQueue.main.async {
                         self?.log("#\(id) audio start failed: \(error)")
-                        if self?.session?.id == id { self?.cancel(message: "Microphone unavailable") }
+                        if self?.session?.id == id { self?.cancel(notice: .micUnavailable) }
                     }
                 }
             }
@@ -202,7 +201,7 @@ final class Controller {
         session = (pipeline, source, id, hotkey, mode)
         phase = handsFree ? .handsFree : .holding
         updateEscape()
-        hud.set(handsFree ? .handsFree(finishHint) : .listening)
+        hud.set(handsFree ? .handsFree : .listening)
         onChange()
         log("#\(id) start (\(handsFree ? "hands-free" : "hold"), mode \(mode.title)"
             + (early > 0 ? String(format: ", %.2f s heard since key-down", Double(early) / Double(Audio.sampleRate)) : "") + ")")
@@ -295,10 +294,10 @@ final class Controller {
         retryAudio = failed || o.gaps > 0 ? (pipeline.recording(), mode) : nil
         if let e = o.error {
             log("#\(id) FAILED after \(ms(o.releaseToText)): \(e)")
-            hud.set(.message(failed ? "Transcription failed · Retry in the menu" : "Not pasted: focus moved"))
+            hud.set(.notice(failed ? .failed : .notPasted))
         } else if o.text.isEmpty {
             log("#\(id) no speech (\(ms(o.releaseToText)))")
-            hud.set(.message("Didn't catch that"))
+            hud.set(.notice(.noSpeech))
         } else {
             let how: String
             switch o.delivery {
@@ -309,13 +308,13 @@ final class Controller {
             log("#\(id) \(how) \(o.text.count) chars, release→text \(ms(o.releaseToText)), audio \(String(format: "%.1f", o.audioSeconds))s, "
                 + "requests \(o.pieces)\(o.gaps > 0 ? ", \(o.gaps) part(s) missing" : "")")
             if isRecording {
-                hud.set(phase == .handsFree ? .handsFree(finishHint) : .listening)
+                hud.set(phase == .handsFree ? .handsFree : .listening)
             } else if o.gaps > 0 {
-                hud.set(.message("Part missing · Retry in the menu"))
+                hud.set(.notice(.partMissing))
             } else if o.delivery == .copiedNoField {
-                hud.set(.message("Copied to clipboard"))
+                hud.set(.notice(.copied))
             } else if o.delivery == .copiedFocusMoved {
-                hud.set(.message("Copied, not pasted: focus moved"))
+                hud.set(.notice(.copiedFocusMoved))
             } else {
                 hud.set(.hidden)
             }
@@ -345,21 +344,21 @@ final class Controller {
     }
 
     /// Escape: stops the recording, or else drops the text still being written (nothing is pasted).
-    func cancel(message: String? = "Cancelled") {
+    func cancel(notice: HUD.Notice? = .cancelled) {
         if let s = session {
             session = nil
             phase = .idle
             if s.source === mic { stopMic() } else { audioQ.async { s.source.stop() } }
             s.pipeline.cancel()
             updateEscape()
-            hud.set(message.map { .message($0) } ?? .hidden)
+            hud.set(notice.map { .notice($0) } ?? .hidden)
             log("#\(s.id) cancelled")
             onChange()
         } else if !writing.isEmpty {
             for (id, p) in writing { cancelledWhileWriting.insert(id); p.cancel() }
             writing = [:]
             updateEscape()
-            hud.set(.message("Cancelled"))
+            hud.set(.notice(.cancelled))
             onChange()
         }
     }

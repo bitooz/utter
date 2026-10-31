@@ -112,3 +112,39 @@ final class FocusTests: XCTestCase {
         XCTAssertFalse(c.isSame(as: d), "another field in the same app")
     }
 }
+
+/// The pill, off screen, stepped by hand at 60 fps.
+final class HUDTests: XCTestCase {
+    private func run(_ hud: HUD, _ seconds: Double) { for _ in 0..<Int(seconds * 60) { hud.advance(1 / 60) } }
+
+    func testThePillSettlesInEachStateAndGoesAway() {
+        let hud = HUD(onScreen: false)
+        hud.set(.listening)
+        run(hud, 1)
+        XCTAssertEqual(hud.pillSize.width, hud.pillTargetWidth, accuracy: 0.5)
+        XCTAssertEqual(hud.pillSize.height, HUD.height, accuracy: 0.5)
+        XCTAssertEqual(hud.pillOpacity, 1, accuracy: 0.01)
+        let listening = hud.pillSize.width
+        hud.set(.handsFree)
+        run(hud, 1)
+        XCTAssertEqual(hud.pillSize.width, listening + HUD.lockRoom, accuracy: 0.5, "room for the lock")
+        hud.set(.notice(.copied))
+        run(hud, 1)
+        XCTAssertEqual(hud.pillSize.width, HUD.noticeWidth, accuracy: 0.5)
+        hud.set(.hidden)
+        run(hud, 1)
+        XCTAssertLessThan(hud.pillOpacity, 0.01)
+    }
+
+    /// Springy but restrained: no size swings more than a few percent past where it's going, at any frame rate.
+    func testSpringsBarelyPassTheirTarget() {
+        for fps in [30.0, 60, 120] {
+            var s = Spring(32, response: 0.42, bounce: 0.22)
+            s.target = 81
+            var most: CGFloat = 0
+            for _ in 0..<Int(fps * 2) { s.step(CGFloat(1 / fps)); most = max(most, s.value) }
+            XCTAssertLessThan((most - 81) / (81 - 32), 0.04, "at \(fps) fps")
+            XCTAssertEqual(s.value, 81, accuracy: 0.05, "settled at \(fps) fps")
+        }
+    }
+}

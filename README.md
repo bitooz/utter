@@ -20,6 +20,9 @@ What's in it:
   install starts with fn for Auto.
 - **Hold to talk, or go hands-free.** Hold the key and talk, let go to paste. Double-tap it to keep talking without
   holding, then tap it once to finish. Esc cancels. A modifier key still works as usual in shortcuts.
+- **A small pill, no words.** A waveform that follows your voice while you talk, a slow wave of dots while the text is
+  written, and for a moment after, a symbol when there's something to know (copied to the clipboard, failed, cancelled).
+  VoiceOver reads each one out.
 - **Clean text.** What you meant to write, without fillers, stutters or the words you corrected yourself on. The prompt
   is yours to edit.
 - **Vocabulary.** Names and terms spelled your way in every dictation ("Claude Code", not "Cloud Code").
