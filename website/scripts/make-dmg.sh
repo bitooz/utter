@@ -1,14 +1,17 @@
 #!/bin/bash
-# Builds website/public/Utter.dmg, the file behind the site's Download button (/download redirects to it).
+# Builds website/public/Utter.dmg, the file behind the site's Download button (/download redirects to it), and the
+# Utter.dmg that .github/workflows/release.yml publishes as a GitHub Release.
 #
 # The app is the one scripts/build.sh builds, with its binary rebuilt universal (Apple silicon and Intel) from the
 # same sources, signed with the Developer ID identity and the hardened runtime, notarized and stapled. The disk image
 # (the app beside an Applications shortcut) is then signed, notarized and stapled too, so both open without
 # Gatekeeper's prompt. The app's code and scripts/build.sh are left as they are.
 #
-#   SIGN_IDENTITY    default: the keychain's "Developer ID Application" identity (Filo's)
+#   SIGN_IDENTITY    default: the keychain's "Developer ID Application" identity
 #   NOTARY_KEY_PATH, NOTARY_KEY_ID, NOTARY_ISSUER
 #                    an App Store Connect API key; read from website/.release.env when it's there (not committed)
+#   BUILD            the build number, default 1 (scripts/build.sh; the version is in ./VERSION)
+#   DMG_OUT          where the disk image goes, default website/public/Utter.dmg
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -18,6 +21,7 @@ if [ -f website/.release.env ]; then . website/.release.env; fi
 : "${NOTARY_ISSUER:?NOTARY_ISSUER}"
 IDENTITY="${SIGN_IDENTITY:-$(security find-identity -v -p codesigning | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)}"
 if [ -z "$IDENTITY" ]; then echo "No Developer ID Application identity in the keychain" >&2; exit 1; fi
+DMG_OUT="${DMG_OUT:-website/public/Utter.dmg}"
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -76,7 +80,13 @@ mkdir "$staging"
 ditto "$app" "$staging/Utter.app"
 ln -s /Applications "$staging/Applications"
 dmg="$work/Utter.dmg"
-hdiutil create -volname Utter -srcfolder "$staging" -fs HFS+ -format ULMO -ov "$dmg" >/dev/null
+# hdiutil now and then fails with "Resource busy", mostly on CI runners; it works on a later try.
+tries=0
+until hdiutil create -volname Utter -srcfolder "$staging" -fs HFS+ -format ULMO -ov "$dmg" >/dev/null; do
+  tries=$((tries + 1))
+  if [ "$tries" -ge 5 ]; then echo "Couldn't make the disk image" >&2; exit 1; fi
+  sleep 5
+done
 codesign --force --sign "$IDENTITY" --timestamp --identifier dev.utter.Utter.dmg "$dmg"
 notarize "$dmg"
 staple "$dmg"
@@ -84,5 +94,6 @@ staple "$dmg"
 spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
 spctl --assess --type execute --verbose=2 "$app"
 
-cp "$dmg" website/public/Utter.dmg
-echo "website/public/Utter.dmg: $(stat -f %z website/public/Utter.dmg) bytes, sha256 $(shasum -a 256 website/public/Utter.dmg | cut -d' ' -f1)"
+mkdir -p "$(dirname "$DMG_OUT")"
+cp "$dmg" "$DMG_OUT"
+echo "$DMG_OUT: $(stat -f %z "$DMG_OUT") bytes, sha256 $(shasum -a 256 "$DMG_OUT" | cut -d' ' -f1)"

@@ -2,8 +2,15 @@
 # Builds Utter.app (and the TestPad.app used by the self-test) into ./build.
 # Signs with your Apple Development identity when there is one, so macOS keeps the
 # Accessibility/Microphone grants across rebuilds; otherwise signs ad hoc.
+#
+#   BUILD   the bundle's build number (CFBundleVersion), default 1; the release workflow passes its own.
+#           The version (CFBundleShortVersionString) is the one in ./VERSION.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+VERSION=$(tr -d '[:space:]' < VERSION)
+BUILD="${BUILD:-1}"
+case "$BUILD" in '' | *[!0-9]*) echo "BUILD is a whole number, not '$BUILD'" >&2; exit 1 ;; esac
 
 swift build -c release
 BIN=$(swift build -c release --show-bin-path)
@@ -26,15 +33,15 @@ bundle() { # name bundle-id exec extra-plist-keys [icon.icns]
   <key>CFBundleIdentifier</key><string>$2</string>
   <key>CFBundleExecutable</key><string>$1</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.2</string>
-  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
+  <key>CFBundleVersion</key><string>$BUILD</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>NSHighResolutionCapable</key><true/>
   $4
 </dict></plist>
 PLIST
   codesign --force --sign "$IDENTITY" "$app" >/dev/null
-  echo "built $app (signed: $IDENTITY)"
+  echo "built $app $VERSION ($BUILD) (signed: $IDENTITY)"
 }
 
 bundle Utter dev.utter.Utter Utter '<key>LSUIElement</key><true/>

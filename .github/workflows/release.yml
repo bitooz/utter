@@ -1,0 +1,166 @@
+name: Release
+
+# Builds Utter with website/scripts/make-dmg.sh, one app for Apple silicon and Intel, signed with the Developer ID
+# identity and the hardened runtime, notarized and stapled, inside a disk image that is signed, notarized and stapled
+# too, and publishes that disk image (Utter.dmg) as a GitHub Release, marked as the latest. The README's download link
+# is …/releases/latest/download/Utter.dmg, so it always gets the newest one.
+#
+# Start it by hand (Actions › Release › Run workflow) with a build number. The release's tag is then
+# v<version>-<build> (v0.2-2), <version> being the one in ./VERSION, made on the commit it ran on. The build number
+# is the app's CFBundleVersion: give each release a number above the last one published.
+#
+# Secrets: MACOS_SIGNING_P12 (base64 of the Developer ID Application certificate and its key, exported as .p12) and
+# MACOS_SIGNING_P12_PASSWORD; APPLE_NOTARY_KEY (base64 of an App Store Connect API key's .p8), APPLE_NOTARY_KEY_ID and
+# APPLE_NOTARY_ISSUER.
+
+on:
+  workflow_dispatch:
+    inputs:
+      build:
+        description: Build number, above the last one published
+        required: true
+        type: number
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Build number and tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_BUILD: ${{ inputs.build }}
+        run: |
+          version=$(tr -d '[:space:]' < VERSION)
+          build=$INPUT_BUILD
+          case "$build" in
+            '' | *[!0-9]*) echo "::error::The build number is a whole number, not '$build'"; exit 1 ;;
+          esac
+          tag="v$version-$build"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "::error::There's a release $tag already"
+            exit 1
+          fi
+          {
+            echo "BUILD=$build"
+            echo "TAG=$tag"
+            echo "VERSION=$version"
+          } >> "$GITHUB_ENV"
+          echo "Releasing Utter $version, build $build, as $tag"
+
+      # The newest released Xcode on the runner, not its default one, so the Swift compiler is as close as it gets to
+      # the one Utter is developed with.
+      - name: Pick Xcode
+        run: |
+          xcode=$(ls -d /Applications/Xcode_[0-9]*.app 2>/dev/null | grep -viE 'beta|release_candidate|_rc' | sort -V | tail -1 || true)
+          if [ -n "$xcode" ]; then sudo xcode-select -s "$xcode"; fi
+          echo "Using $(xcode-select -p)"
+          swift --version
+
+      - name: Test
+        run: swift test
+
+      - name: Import the signing identity and the notary key
+        env:
+          MACOS_SIGNING_P12: ${{ secrets.MACOS_SIGNING_P12 }}
+          MACOS_SIGNING_P12_PASSWORD: ${{ secrets.MACOS_SIGNING_P12_PASSWORD }}
+          APPLE_NOTARY_KEY: ${{ secrets.APPLE_NOTARY_KEY }}
+          APPLE_NOTARY_KEY_ID: ${{ secrets.APPLE_NOTARY_KEY_ID }}
+          APPLE_NOTARY_ISSUER: ${{ secrets.APPLE_NOTARY_ISSUER }}
+        run: |
+          for secret in MACOS_SIGNING_P12 MACOS_SIGNING_P12_PASSWORD APPLE_NOTARY_KEY APPLE_NOTARY_KEY_ID APPLE_NOTARY_ISSUER; do
+            if [ -z "$(printenv "$secret")" ]; then
+              echo "::error::The repository secret $secret isn't set"
+              exit 1
+            fi
+          done
+          keychain="$RUNNER_TEMP/utter-signing.keychain-db"
+          password=$(openssl rand -hex 16)
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          echo "$MACOS_SIGNING_P12" | base64 --decode > "$RUNNER_TEMP/signing.p12"
+          security import "$RUNNER_TEMP/signing.p12" -k "$keychain" -P "$MACOS_SIGNING_P12_PASSWORD" -T /usr/bin/codesign
+          rm "$RUNNER_TEMP/signing.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" >/dev/null
+          # codesign only finds identities in keychains on the search list.
+          # shellcheck disable=SC2046 # one keychain per word
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          # Only a Developer ID Application identity can be notarized.
+          identity=$(security find-identity -v -p codesigning "$keychain" | grep 'Developer ID Application' | grep -Eo '[0-9A-F]{40}' | head -1)
+          if [ -z "$identity" ]; then
+            echo "::error::MACOS_SIGNING_P12 holds no Developer ID Application identity"
+            security find-identity -v -p codesigning "$keychain"
+            exit 1
+          fi
+          echo "$APPLE_NOTARY_KEY" | base64 --decode > "$RUNNER_TEMP/notary.p8"
+          {
+            echo "SIGN_IDENTITY=$identity"
+            echo "KEYCHAIN=$keychain"
+            echo "NOTARY_KEY_PATH=$RUNNER_TEMP/notary.p8"
+            echo "NOTARY_KEY_ID=$APPLE_NOTARY_KEY_ID"
+            echo "NOTARY_ISSUER=$APPLE_NOTARY_ISSUER"
+          } >> "$GITHUB_ENV"
+
+      - name: Build, sign, notarize and package
+        env:
+          DMG_OUT: dist/Utter.dmg
+        run: website/scripts/make-dmg.sh
+
+      - name: Check the disk image and the app in it
+        run: |
+          xcrun stapler validate dist/Utter.dmg
+          spctl --assess --type open --context context:primary-signature --verbose=2 dist/Utter.dmg
+          mount="$RUNNER_TEMP/utter-dmg"
+          mkdir -p "$mount"
+          hdiutil attach dist/Utter.dmg -readonly -nobrowse -mountpoint "$mount" >/dev/null
+          trap 'hdiutil detach "$mount" -quiet || true' EXIT
+          app="$mount/Utter.app"
+          archs=$(lipo -archs "$app/Contents/MacOS/Utter")
+          echo "Architectures: $archs"
+          case "$archs" in *arm64*x86_64* | *x86_64*arm64*) ;; *) echo "::error::Not a universal app: $archs"; exit 1 ;; esac
+          codesign --verify --deep --strict --verbose=2 "$app"
+          xcrun stapler validate "$app"
+          spctl --assess --type execute --verbose=2 "$app"
+          shown=$(plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist")
+          built=$(plutil -extract CFBundleVersion raw -o - "$app/Contents/Info.plist")
+          if [ "$shown" != "$VERSION" ] || [ "$built" != "$BUILD" ]; then
+            echo "::error::The app says $shown ($built), not $VERSION ($BUILD)"
+            exit 1
+          fi
+          echo "SHA256=$(shasum -a 256 dist/Utter.dmg | cut -d' ' -f1)" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: utter-${{ env.BUILD }}
+          path: dist/Utter.dmg
+          retention-days: 14
+
+      # --latest: the README's download link goes by the latest release.
+      - name: Publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="Utter $VERSION, build $BUILD, from $GITHUB_SHA: one app for Apple silicon and Intel, signed and notarized by Apple. It needs macOS 14 or later.
+
+          Download Utter.dmg, open it and drag Utter onto Applications.
+
+          SHA-256 of Utter.dmg: \`$SHA256\`"
+          gh release create "$TAG" dist/Utter.dmg \
+            --target "$GITHUB_SHA" --title "Utter $VERSION ($BUILD)" --notes "$notes" --latest
+          echo "### [Utter $VERSION ($BUILD)]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$TAG)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Remove the signing keychain
+        if: always()
+        run: |
+          if [ -n "${KEYCHAIN:-}" ]; then security delete-keychain "$KEYCHAIN" || true; fi
+          rm -f "$RUNNER_TEMP/notary.p8" "$RUNNER_TEMP/signing.p12"
