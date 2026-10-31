@@ -1,0 +1,7 @@
+Here is my update for the weekly meeting. This week I focused on Filo and on the dictation app called Utter. The biggest change is that short dictations are now sent as one recording, which fixes most of the strange errors we saw before.
+[[slnc 1100]]
+For longer notes like this one, the app waits for a real pause before it cuts the audio. Each block overlaps the previous one by about a second, and the earlier text goes along as context, so names like Retype and OpenRouter stay spelled the same way.
+[[slnc 1100]]
+On the product side, we talked to five customers on Tuesday. Three of them asked for better keyboard shortcuts, and two wanted an easier way to share their notes with the team. We should pick one of these for the next sprint, ideally the shortcuts, since they are cheaper to build.
+[[slnc 1100]]
+Finally, please review the pull request from Claude Code before Thursday, and send me any questions by email. I will be traveling on Monday, so expect slower replies. Thanks, everyone, and have a good weekend.

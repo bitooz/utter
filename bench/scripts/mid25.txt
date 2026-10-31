@@ -1,0 +1,1 @@
+I just pushed the new build of Utter to the test machine. The hotkey works in every app I tried, including Safari, Notes and the terminal. Next, I want to compare Gemini models on OpenRouter and see which one handles long dictations best. Let's also ask Claude Code to clean up the audio code before Friday, because the microphone setup is still a bit fragile.

@@ -1,0 +1,21 @@
+# Build output
+.build/
+build/
+*.xcodeproj/xcuserdata/
+.swiftpm/
+
+# Logs, recordings and scratch audio (real dictations stay in ~/Library/Application Support/Utter, never here)
+*.log
+recordings/
+failed/
+*.m4a
+timings.csv
+
+# Secrets: the OpenRouter key lives in the Keychain only
+.env
+.env.*
+*.key
+*.pem
+
+# macOS
+.DS_Store
