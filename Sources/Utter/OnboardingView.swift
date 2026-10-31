@@ -270,9 +270,8 @@ struct TestStep: View {
             } else if o.text.isEmpty {
                 Label("Didn't catch any words. Hold the key a little longer and speak up.", systemImage: "questionmark.circle")
                     .foregroundStyle(.orange)
-            } else if o.delivery != .pasted {
+            } else if o.delivery == .copiedNoField || o.delivery == .copiedFocusMoved {
                 Label(o.delivery == .copiedNoField ? "No text field had the focus, so the text is on the clipboard."
-                      : o.delivery == .copiedUnconfirmed ? "Utter couldn't see the text arrive in a field, so it's on the clipboard too."
                       : "The focus moved, so the text is on the clipboard instead.",
                       systemImage: "doc.on.clipboard").foregroundStyle(.orange)
             } else {

@@ -30,6 +30,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             HUDCapture.run(to: args[i + 1])
             exit(0)
         }
+        if let i = args.firstIndex(of: "--probe-ax"), i + 2 < args.count { // how an app reports its focus
+            let (bundle, file) = (args[i + 1], args[i + 2])
+            Task { @MainActor in
+                await AXProbe.run(bundle: bundle, to: file)
+                exit(0)
+            }
+            return
+        }
         if let i = args.firstIndex(of: "--probe-delivery"), i + 1 < args.count { // where test sentences land, app by app
             let dir = args[i + 1]
             Task { @MainActor in

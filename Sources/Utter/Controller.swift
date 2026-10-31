@@ -22,8 +22,8 @@ final class Controller {
         case copiedNoField
         /// The focus moved after release: the text is on the clipboard, not pasted somewhere else.
         case copiedFocusMoved
-        /// Pasted, but not seen in a text field (no field, or an app that doesn't tell): the text is on the clipboard too.
-        case copiedUnconfirmed
+        /// Pasted, with no sign it landed (an app that says nothing): the text is quietly left on the clipboard too.
+        case pastedUnconfirmed
     }
 
     struct Outcome {
@@ -303,8 +303,10 @@ final class Controller {
             done(.copiedNoField, now.summary)
         } else {
             Paster.paste(Paster.spaced(text, after: prev), into: now) { check in
-                if case .unconfirmed(let why) = check { done(.copiedUnconfirmed, "\(now.summary); not seen in a field (\(why))") }
-                else { done(.pasted, "\(now.summary); seen in the field") }
+                switch check {
+                case .landed(let how): done(.pasted, "\(now.summary); \(how)")
+                case .unconfirmed(let why): done(.pastedUnconfirmed, "\(now.summary); not confirmed, left on the clipboard: \(why)")
+                }
             }
         }
     }
@@ -325,7 +327,7 @@ final class Controller {
             case .pasted: how = "pasted"
             case .copiedNoField: how = "copied (no text field focused)"
             case .copiedFocusMoved: how = "copied (focus moved since release)"
-            case .copiedUnconfirmed: how = "pasted and left on the clipboard"
+            case .pastedUnconfirmed: how = "pasted (not confirmed)"
             }
             log("#\(id) \(how) \(o.text.count) chars, release→text \(ms(o.releaseToText)), audio \(String(format: "%.1f", o.audioSeconds))s, "
                 + "requests \(o.pieces)\(o.gaps > 0 ? ", \(o.gaps) part(s) missing" : "") · \(o.target)")
@@ -333,7 +335,7 @@ final class Controller {
                 hud.set(phase == .handsFree ? .handsFree : .listening)
             } else if o.gaps > 0 {
                 hud.set(.notice(.partMissing))
-            } else if o.delivery == .copiedNoField || o.delivery == .copiedUnconfirmed {
+            } else if o.delivery == .copiedNoField {
                 hud.set(.notice(.copied))
             } else if o.delivery == .copiedFocusMoved {
                 hud.set(.notice(.copiedFocusMoved))

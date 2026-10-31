@@ -4,7 +4,10 @@ import WebKit
 // One-window target app for Utter's self-test. Shows either a native text view or a web <textarea>
 // (like Electron/browser apps) and mirrors its text and focus state into a JSON file.
 //
-//   TestPad --state /tmp/pad.json [--field native|web]
+//   TestPad --state /tmp/pad.json [--field native|web|web-hidden|web-hidden-empty]
+//
+// web-hidden: the web view tells Accessibility nothing (like some web-view apps: only the window shows), so Utter can't
+// see the field. web-hidden-empty: the same with no field on the page.
 
 final class Pad: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextViewDelegate, WKScriptMessageHandler {
     var window: NSWindow!
@@ -20,18 +23,32 @@ final class Pad: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextViewDe
             if a == "--state" { statePath = it.next() ?? statePath }
             if a == "--field" { field = it.next() ?? field }
         }
+        // A standard Edit menu, like real apps: ⌘V reaches the field through it.
+        let main = NSMenu(), appItem = NSMenuItem(), editItem = NSMenuItem()
+        main.addItem(appItem); main.addItem(editItem)
+        appItem.submenu = NSMenu()
+        appItem.submenu?.addItem(withTitle: "Quit TestPad", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        let edit = NSMenu(title: "Edit")
+        edit.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        edit.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        edit.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editItem.submenu = edit
+        NSApp.mainMenu = main
+
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 260),
                           styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "Utter TestPad (\(field)) — synthetic keys only while this window is focused"
         window.delegate = self
         window.center()
 
-        if field == "web" {
+        if field.hasPrefix("web") {
             let cfg = WKWebViewConfiguration()
             cfg.userContentController.add(self, name: "pad")
-            let w = WKWebView(frame: window.contentView!.bounds, configuration: cfg)
+            let w = field == "web" ? WKWebView(frame: window.contentView!.bounds, configuration: cfg)
+                : HiddenWebView(frame: window.contentView!.bounds, configuration: cfg)
             w.autoresizingMask = [.width, .height]
-            w.loadHTMLString("""
+            w.loadHTMLString(field == "web-hidden-empty" ? "<body style='font:15px -apple-system;padding:12px'>No field here.</body>" : """
             <html><body style="margin:0;font:15px -apple-system">
             <textarea id=t autofocus style="width:100%;height:100vh;border:0;padding:12px;font:inherit;box-sizing:border-box"></textarea>
             <script>
@@ -54,7 +71,7 @@ final class Pad: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextViewDe
             window.contentView = scroll
         }
         window.makeKeyAndOrderFront(nil)
-        if field != "web" { window.makeFirstResponder(textView) }
+        if field.hasPrefix("web") { window.makeFirstResponder(web) } else { window.makeFirstResponder(textView) }
         NSApp.activate(ignoringOtherApps: true)
         write()
     }
@@ -73,6 +90,14 @@ final class Pad: NSObject, NSApplicationDelegate, NSWindowDelegate, NSTextViewDe
             try? d.write(to: URL(fileURLWithPath: statePath), options: .atomic)
         }
     }
+}
+
+/// A web view that keeps itself and its page out of the Accessibility tree.
+final class HiddenWebView: WKWebView {
+    override func isAccessibilityElement() -> Bool { false }
+    override func accessibilityChildren() -> [Any]? { [] }
+    override var accessibilityFocusedUIElement: Any? { window }
+    override func accessibilityHitTest(_ point: NSPoint) -> Any? { window }
 }
 
 let app = NSApplication.shared

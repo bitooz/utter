@@ -27,8 +27,9 @@ What's in it:
   is yours to edit.
 - **Vocabulary.** Names and terms spelled your way in every dictation ("Claude Code", not "Cloud Code").
 - **Pastes where you were, never loses a word.** Into the text field that had the focus, and your own clipboard is put
-  back once the text shows up there. With no text field focused, or when Utter can't see the text arrive (some apps
-  don't say), the text stays on the clipboard and the pill shows a clipboard.
+  back once the text shows up there. With no text field focused, the text goes to the clipboard and the pill shows a
+  clipboard. Where Utter pastes but can't see the text arrive (some apps don't say), it quietly leaves the text on the
+  clipboard too.
 - **Quick, even for long dictations.** Short ones come back in about a second. Long ones are sent in blocks while you
   talk, cut only at real pauses, so they finish about as fast as a short one.
 - **Your choice of model.** Each mode's model can be changed to any OpenRouter model that takes audio.
