@@ -1,6 +1,6 @@
 #!/bin/bash
-# Builds website/public/Utter.dmg, the file behind the site's Download button (/download redirects to it), and the
-# Utter.dmg that .github/workflows/release.yml publishes as a GitHub Release.
+# Builds Utter.dmg, the disk image .github/workflows/release.yml publishes as a GitHub Release. The site's Download
+# button links to the latest release, so a new release is how downloads ship; the site doesn't host the file.
 #
 # The app is the one scripts/build.sh builds, with its binary rebuilt universal (Apple silicon and Intel) from the
 # same sources, signed with the Developer ID identity and the hardened runtime, notarized and stapled. The disk image
@@ -11,7 +11,7 @@
 #   NOTARY_KEY_PATH, NOTARY_KEY_ID, NOTARY_ISSUER
 #                    an App Store Connect API key; read from website/.release.env when it's there (not committed)
 #   BUILD            the build number, default 1 (scripts/build.sh; the version is in ./VERSION)
-#   DMG_OUT          where the disk image goes, default website/public/Utter.dmg
+#   DMG_OUT          where the disk image goes, default dist/Utter.dmg
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -21,7 +21,7 @@ if [ -f website/.release.env ]; then . website/.release.env; fi
 : "${NOTARY_ISSUER:?NOTARY_ISSUER}"
 IDENTITY="${SIGN_IDENTITY:-$(security find-identity -v -p codesigning | sed -n 's/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -1)}"
 if [ -z "$IDENTITY" ]; then echo "No Developer ID Application identity in the keychain" >&2; exit 1; fi
-DMG_OUT="${DMG_OUT:-website/public/Utter.dmg}"
+DMG_OUT="${DMG_OUT:-dist/Utter.dmg}"
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT

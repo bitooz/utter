@@ -6,8 +6,3 @@
 
 /img/*
   Cache-Control: public, max-age=86400
-
-/Utter.dmg
-  Content-Type: application/x-apple-diskimage
-  Content-Disposition: attachment; filename="Utter.dmg"
-  Cache-Control: public, max-age=300

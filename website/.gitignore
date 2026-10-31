@@ -1,6 +1,4 @@
 .wrangler/
 node_modules/
-# Built by scripts/make-dmg.sh; too big for git, uploaded with the site.
-public/Utter.dmg
-# NOTARY_KEY_PATH, NOTARY_KEY_ID, NOTARY_ISSUER for scripts/make-dmg.sh
+# NOTARY_KEY_PATH, NOTARY_KEY_ID, NOTARY_ISSUER for running scripts/make-dmg.sh on this Mac
 .release.env
