@@ -30,6 +30,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             HUDCapture.run(to: args[i + 1])
             exit(0)
         }
+        if let i = args.firstIndex(of: "--probe-delivery"), i + 1 < args.count { // where test sentences land, app by app
+            let dir = args[i + 1]
+            Task { @MainActor in
+                await DeliveryProbe.run(to: dir)
+                exit(0)
+            }
+            return
+        }
         if let i = args.firstIndex(of: "--make-icons"), i + 1 < args.count {
             Logo.writeFiles(to: args[i + 1])
             exit(0)

@@ -2,8 +2,10 @@ import AppKit
 import ApplicationServices
 import UtterCore
 
-/// Puts text into the focused field: clipboard + synthetic Cmd+V (works in native, web and Electron apps),
-/// then restores whatever was on the clipboard before. With no text field focused, leaves the text on the clipboard instead.
+/// Puts text into the focused field: clipboard + synthetic Cmd+V (works in native, web and Electron apps), then restores
+/// whatever was on the clipboard before, but only once the text is seen in the field. Whenever that can't be confirmed
+/// (no text field, an app that doesn't say what has the focus, a field that shows no change), the text stays on the
+/// clipboard: a transcript is never lost.
 enum Paster {
     /// What sits just before the caret in the focused field, if Accessibility can tell.
     /// Called at key release, while the transcript is still on its way.
@@ -70,6 +72,7 @@ enum Paster {
     struct Focus {
         enum Kind { case text, notText, unknown }
         var pid: pid_t?
+        var bundle: String?
         var element: AXUIElement?
         var role: String?
         var frame: CGRect?
@@ -82,6 +85,9 @@ enum Paster {
             if CFEqual(a, b) { return true }
             return role == other.role && frame != nil && frame == other.frame
         }
+
+        /// For the log: "com.apple.Safari, AXTextField, text".
+        var summary: String { "\(bundle ?? pid.map { "pid \($0)" } ?? "no app"), \(role ?? (element == nil ? "no focused element" : "no role")), \(kind)" }
     }
 
     /// Roles that never take typed text: a focused one of these means there is no text field to paste into.
@@ -92,11 +98,17 @@ enum Paster {
         "AXColumn", "AXSplitter", "AXProgressIndicator", "AXLevelIndicator", "AXHeading", "AXDockItem",
     ]
     private static let textRoles: Set<String> = ["AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"]
-    /// Apps where nothing is focused when no window is (the desktop): no text field.
+    /// Apps where nothing is focused when no window is, and whose only text fields have text roles (Finder: the desktop
+    /// reports an AXGroup that looks editable, but the only fields are rename, search and Go to Folder).
     private static let noFocusMeansNoField: Set<String> = ["com.apple.finder"]
 
+    /// Electron apps (Slack, VS Code…) build their Accessibility tree only when asked to; asked once per app.
+    private static var askedForTree = Set<pid_t>()
+    private static let askedLock = NSLock()
+
     /// Reads the focus through Accessibility. Off the main thread: an app (or Utter itself) may take a moment to answer.
-    /// Anything Accessibility can't tell (an app that doesn't expose its fields) counts as `.unknown`, which still pastes.
+    /// Anything Accessibility can't tell (an app that doesn't expose its fields) counts as `.unknown`: it still pastes,
+    /// and the text stays on the clipboard too.
     static func focus() -> Focus {
         let system = AXUIElementCreateSystemWide()
         AXUIElementSetMessagingTimeout(system, 0.2)
@@ -108,20 +120,31 @@ enum Paster {
             if AXUIElementGetPid(a as! AXUIElement, &p) == .success { pid = p }
         }
         if pid == nil { pid = NSWorkspace.shared.frontmostApplication?.processIdentifier }
+        let bundle = pid.flatMap { NSRunningApplication(processIdentifier: $0)?.bundleIdentifier }
         var focused: CFTypeRef?
-        let err = AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focused)
+        var err = AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focused)
+        if err != .success || focused.map({ role(of: $0) == kAXWindowRole }) == true, let pid, pid != getpid(), askedLock.withLock({ askedForTree.insert(pid).inserted }) {
+            // Maybe an Electron app with its tree off: switch it on and look again.
+            let app = AXUIElementCreateApplication(pid)
+            AXUIElementSetMessagingTimeout(app, 0.2)
+            if AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue) == .success {
+                Thread.sleep(forTimeInterval: 0.15)
+                err = AXUIElementCopyAttributeValue(system, kAXFocusedUIElementAttribute as CFString, &focused)
+            }
+        }
         guard err == .success, let el = focused, CFGetTypeID(el) == AXUIElementGetTypeID() else {
-            let bundle = pid.flatMap { NSRunningApplication(processIdentifier: $0)?.bundleIdentifier }
             let none = err == .noValue && bundle.map(noFocusMeansNoField.contains) == true
-            return Focus(pid: pid, element: nil, kind: none ? .notText : .unknown)
+            return Focus(pid: pid, bundle: bundle, element: nil, kind: none ? .notText : .unknown)
         }
         let element = el as! AXUIElement
         AXUIElementSetMessagingTimeout(element, 0.2)
-        var f = Focus(pid: pid, element: element, role: string(element, kAXRoleAttribute), frame: frame(element), kind: .unknown)
+        var f = Focus(pid: pid, bundle: bundle, element: element, role: string(element, kAXRoleAttribute), frame: frame(element), kind: .unknown)
         var settable: DarwinBoolean = false
         var range: CFTypeRef?
         if let role = f.role, textRoles.contains(role) {
             f.kind = .text
+        } else if bundle.map(noFocusMeansNoField.contains) == true {
+            f.kind = .notText
         } else if AXUIElementCopyAttributeValue(element, kAXSelectedTextRangeAttribute as CFString, &range) == .success
                     || (AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable) == .success && settable.boolValue
                         && string(element, kAXValueAttribute) != nil) {
@@ -130,6 +153,11 @@ enum Paster {
             f.kind = .notText
         }
         return f
+    }
+
+    private static func role(of ref: CFTypeRef) -> String? {
+        guard CFGetTypeID(ref) == AXUIElementGetTypeID() else { return nil }
+        return string(ref as! AXUIElement, kAXRoleAttribute)
     }
 
     private static func string(_ e: AXUIElement, _ attr: String) -> String? {
@@ -181,64 +209,92 @@ enum Paster {
         pb.setString(text, forType: .string)
     }
 
-    /// Pastes with ⌘V through the clipboard (works in native, web and Electron apps), then puts the user's clipboard back
-    /// once the text has landed: when the field shows the change through Accessibility, otherwise after a wait long enough
-    /// for slow apps. Call on the main thread.
-    static func paste(_ text: String, into target: Focus) {
+    /// How a paste went: seen in the field, or not (and why), in which case the text was left on the clipboard.
+    enum Check: Equatable {
+        case landed
+        case unconfirmed(String)
+    }
+
+    /// Pastes with ⌘V through the clipboard (works in native, web and Electron apps), then watches the field. Once the text
+    /// shows there, the user's clipboard is put back. When it can't be seen (`target` isn't a text field Accessibility
+    /// can read, or the field doesn't change), the text stays on the clipboard as a normal entry. Call on the main thread;
+    /// `done` comes on the main thread too, within about 1.5 s.
+    static func paste(_ text: String, into target: Focus, done: @escaping (Check) -> Void) {
         let pb = NSPasteboard.general
         // A paste right after another one: the clipboard still holds the last transcript, the user's is the one saved then.
         let saved = borrowed?.items ?? (pb.pasteboardItems ?? []).map { item in
             item.types.compactMap { t in item.data(forType: t).map { (t, $0) } }
         }
+        let slow = slowPasteApps.contains { (target.bundle ?? "").hasPrefix($0) }
+        let element = target.kind == .text ? target.element : nil
+        // Known up front: nothing to watch, so the text will stay.
+        let blind: String? = slow ? "remote desktop or virtual machine" : target.kind != .text ? "\(target.kind) focus"
+            : element == nil ? "no field to watch" : nil
         generation += 1
         let gen = generation
-        borrowed = (saved, gen)
         pb.clearContents()
         pb.setString(text, forType: .string)
-        // Tells clipboard managers to ignore this short-lived entry.
-        pb.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.TransientType"))
-        pb.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.AutoGeneratedType"))
+        if blind == nil {
+            borrowed = (saved, gen)
+            // Tells clipboard managers to ignore this entry: it's only there for the paste.
+            pb.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.TransientType"))
+            pb.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.AutoGeneratedType"))
+        } else {
+            borrowed = nil // the text replaces the user's clipboard, as a normal copy
+        }
         let ours = pb.changeCount
 
-        let element = target.kind == .text && target.pid != getpid() ? target.element : nil
-        let bundle = target.pid.flatMap { NSRunningApplication(processIdentifier: $0)?.bundleIdentifier } ?? ""
-        let slow = slowPasteApps.contains { bundle.hasPrefix($0) }
-        let before = element.flatMap(fieldState)
-
-        guard let v = commandV() else { return }
-        v.down.post(tap: .cghidEventTap)
-        v.up.post(tap: .cghidEventTap)
-
-        let restore = {
-            guard generation == gen else { return } // a later paste or copy took over
-            borrowed = nil
-            guard pb.changeCount == ours else { return } // something else copied meanwhile
-            pb.clearContents()
-            let items: [NSPasteboardItem] = saved.map { pairs in
-                let item = NSPasteboardItem()
-                for (t, d) in pairs { item.setData(d, forType: t) }
-                return item
-            }
-            if !items.isEmpty { pb.writeObjects(items) }
-        }
-        let fallback: TimeInterval = slow ? 5 : (element == nil ? 1.5 : 3)
-        guard let element, let before, !slow else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + fallback, execute: restore)
-            return
-        }
-        // Watch the field (off the main thread: the app answers in its own time) until the text shows up.
+        // Off the main thread: the app (Utter itself, for its own fields) answers in its own time.
         DispatchQueue.global(qos: .userInitiated).async {
-            let start = Date()
-            var landed = false
-            while Date().timeIntervalSince(start) < fallback {
-                Thread.sleep(forTimeInterval: 0.05)
-                if let now = fieldState(element), now != before { landed = true; break }
+            let before = blind == nil ? element.flatMap(fieldState) : nil
+            if let v = commandV() {
+                v.down.post(tap: .cghidEventTap)
+                v.up.post(tap: .cghidEventTap)
             }
-            // The app has read the clipboard once the text shows; a moment more for apps that read it twice.
-            DispatchQueue.main.asyncAfter(deadline: .now() + (landed ? 0.25 : 0)) {
-                if !landed { Log.shared("paste: no change seen in the field after \(Int(fallback)) s; clipboard restored anyway") }
-                restore()
+            var landed = false
+            if let element, let before {
+                let start = Date()
+                while Date().timeIntervalSince(start) < 1.5 {
+                    Thread.sleep(forTimeInterval: 0.05)
+                    if let now = fieldState(element), now != before { landed = true; break }
+                }
+            }
+            let why = blind ?? (before == nil ? "the field doesn't report its text" : landed ? nil : "no change seen in the field")
+            DispatchQueue.main.async {
+                if let why {
+                    keep(text, gen: gen, ours: ours, rewrite: blind == nil)
+                    done(.unconfirmed(why))
+                } else {
+                    // The app has read the clipboard once the text shows; a moment more for apps that read it twice.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { restore(saved, gen: gen, ours: ours) }
+                    done(.landed)
+                }
             }
         }
+    }
+
+    /// Puts the user's clipboard back after a paste that landed.
+    private static func restore(_ saved: [[(NSPasteboard.PasteboardType, Data)]], gen: Int, ours: Int) {
+        let pb = NSPasteboard.general
+        guard generation == gen else { return } // a later paste or copy took over
+        borrowed = nil
+        guard pb.changeCount == ours else { return } // something else copied meanwhile
+        pb.clearContents()
+        let items: [NSPasteboardItem] = saved.map { pairs in
+            let item = NSPasteboardItem()
+            for (t, d) in pairs { item.setData(d, forType: t) }
+            return item
+        }
+        if !items.isEmpty { pb.writeObjects(items) }
+    }
+
+    /// Leaves the text of a paste that couldn't be confirmed on the clipboard, as a normal entry.
+    private static func keep(_ text: String, gen: Int, ours: Int, rewrite: Bool) {
+        guard generation == gen else { return }
+        borrowed = nil
+        // Written again without the "ignore me" marks, so clipboard managers keep it too.
+        guard rewrite, NSPasteboard.general.changeCount == ours else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
     }
 }

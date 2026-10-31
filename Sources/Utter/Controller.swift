@@ -14,7 +14,7 @@ extension Notification.Name {
 /// The mic starts the moment a mode's key goes down (not 0.3 s later, when the hold counts), so the first word isn't cut:
 /// that audio waits in a `MicFeed` and is dropped if the key turns out to be part of a shortcut.
 /// The text goes where the focus was at release: pasted into that text field, or left on the clipboard when there is
-/// no text field or the focus has moved on.
+/// no text field, the focus has moved on, or the paste can't be seen landing.
 final class Controller {
     enum Delivery: Equatable {
         case pasted
@@ -22,6 +22,8 @@ final class Controller {
         case copiedNoField
         /// The focus moved after release: the text is on the clipboard, not pasted somewhere else.
         case copiedFocusMoved
+        /// Pasted, but not seen in a text field (no field, or an app that doesn't tell): the text is on the clipboard too.
+        case copiedUnconfirmed
     }
 
     struct Outcome {
@@ -32,6 +34,8 @@ final class Controller {
         var model = ""
         var error: String?
         var delivery: Delivery = .pasted
+        /// Where it went, for the log: app, role and kind of the focused element, and why a paste wasn't confirmed.
+        var target = ""
         /// Parts that couldn't be transcribed even after a retry (marked in `text`).
         var gaps = 0
     }
@@ -269,21 +273,38 @@ final class Controller {
                     return
                 }
                 var o = result
-                if o.error == nil, !o.text.isEmpty {
-                    if !mayPaste() {
-                        o.error = "focus left the target; not pasted"
-                    } else if !now.isSame(as: target) {
-                        Paster.copy(o.text)
-                        o.delivery = .copiedFocusMoved
-                    } else if now.kind == .notText {
-                        Paster.copy(o.text)
-                        o.delivery = .copiedNoField
-                    } else {
-                        Paster.paste(Paster.spaced(o.text, after: prev), into: now)
-                    }
-                }
+                o.target = now.summary
                 o.releaseToText = Date().timeIntervalSince(released)
-                finish(id, o, pipeline: pipeline, mode: mode, keep: keep)
+                guard o.error == nil, !o.text.isEmpty else { return finish(id, o, pipeline: pipeline, mode: mode, keep: keep) }
+                guard mayPaste() else {
+                    o.error = "focus left the target; not pasted"
+                    return finish(id, o, pipeline: pipeline, mode: mode, keep: keep)
+                }
+                // The pill keeps writing until the text is seen in the field (or isn't, and stays on the clipboard).
+                Self.deliver(o.text, after: prev, target: target, now: now) { [weak self] how, whereTo in
+                    o.delivery = how
+                    o.target = whereTo
+                    self?.finish(id, o, pipeline: pipeline, mode: mode, keep: keep)
+                }
+            }
+        }
+    }
+
+    /// Puts the text where the user was at release (`target`), given where the focus is now: pasted into a text field
+    /// when it's still there, else left on the clipboard. A paste that isn't seen landing leaves it on the clipboard too.
+    /// `done` (main thread) gets how it went and where, for the log.
+    static func deliver(_ text: String, after prev: Character?, target: Paster.Focus, now: Paster.Focus,
+                        done: @escaping (Delivery, String) -> Void) {
+        if !now.isSame(as: target) {
+            Paster.copy(text)
+            done(.copiedFocusMoved, "\(target.summary) at release, now \(now.summary)")
+        } else if now.kind == .notText {
+            Paster.copy(text)
+            done(.copiedNoField, now.summary)
+        } else {
+            Paster.paste(Paster.spaced(text, after: prev), into: now) { check in
+                if case .unconfirmed(let why) = check { done(.copiedUnconfirmed, "\(now.summary); not seen in a field (\(why))") }
+                else { done(.pasted, "\(now.summary); seen in the field") }
             }
         }
     }
@@ -293,7 +314,7 @@ final class Controller {
         let failed = o.error != nil && !o.error!.hasPrefix("focus")
         retryAudio = failed || o.gaps > 0 ? (pipeline.recording(), mode) : nil
         if let e = o.error {
-            log("#\(id) FAILED after \(ms(o.releaseToText)): \(e)")
+            log("#\(id) FAILED after \(ms(o.releaseToText)): \(e)\(o.target.isEmpty ? "" : " · \(o.target)")")
             hud.set(.notice(failed ? .failed : .notPasted))
         } else if o.text.isEmpty {
             log("#\(id) no speech (\(ms(o.releaseToText)))")
@@ -304,14 +325,15 @@ final class Controller {
             case .pasted: how = "pasted"
             case .copiedNoField: how = "copied (no text field focused)"
             case .copiedFocusMoved: how = "copied (focus moved since release)"
+            case .copiedUnconfirmed: how = "pasted and left on the clipboard"
             }
             log("#\(id) \(how) \(o.text.count) chars, release→text \(ms(o.releaseToText)), audio \(String(format: "%.1f", o.audioSeconds))s, "
-                + "requests \(o.pieces)\(o.gaps > 0 ? ", \(o.gaps) part(s) missing" : "")")
+                + "requests \(o.pieces)\(o.gaps > 0 ? ", \(o.gaps) part(s) missing" : "") · \(o.target)")
             if isRecording {
                 hud.set(phase == .handsFree ? .handsFree : .listening)
             } else if o.gaps > 0 {
                 hud.set(.notice(.partMissing))
-            } else if o.delivery == .copiedNoField {
+            } else if o.delivery == .copiedNoField || o.delivery == .copiedUnconfirmed {
                 hud.set(.notice(.copied))
             } else if o.delivery == .copiedFocusMoved {
                 hud.set(.notice(.copiedFocusMoved))

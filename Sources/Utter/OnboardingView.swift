@@ -272,7 +272,8 @@ struct TestStep: View {
                     .foregroundStyle(.orange)
             } else if o.delivery != .pasted {
                 Label(o.delivery == .copiedNoField ? "No text field had the focus, so the text is on the clipboard."
-                                                   : "The focus moved, so the text is on the clipboard instead.",
+                      : o.delivery == .copiedUnconfirmed ? "Utter couldn't see the text arrive in a field, so it's on the clipboard too."
+                      : "The focus moved, so the text is on the clipboard instead.",
                       systemImage: "doc.on.clipboard").foregroundStyle(.orange)
             } else {
                 Label(String(format: "Done in %.2f s after you let go, with %@.", o.releaseToText, ModelNames.text(o.model)),
