@@ -236,8 +236,8 @@ enum Paster {
     /// Pastes with ⌘V through the clipboard (works in native, web and Electron apps), then waits up to 1.5 s for a sign it
     /// landed: the app reading the clipboard, or the field showing the change through Accessibility. Then the user's
     /// clipboard is put back. Without a sign, the text stays on the clipboard as a normal entry. Call on the main
-    /// thread; `done` comes on the main thread too.
-    static func paste(_ text: String, into target: Focus, done: @escaping (Check) -> Void) {
+    /// thread; `sent` (as soon as ⌘V is posted) and `done` (once the wait is over) come on the main thread too.
+    static func paste(_ text: String, into target: Focus, sent: @escaping () -> Void = {}, done: @escaping (Check) -> Void) {
         let pb = NSPasteboard.general
         // A paste right after another one: the clipboard still holds the last transcript, the user's is the one saved then.
         let saved = borrowed?.items ?? (pb.pasteboardItems ?? []).map { item in
@@ -272,6 +272,7 @@ enum Paster {
                 v.down.post(tap: .cghidEventTap)
                 v.up.post(tap: .cghidEventTap)
             }
+            DispatchQueue.main.async(execute: sent)
             var sign: String?
             let start = Date()
             while !slow, sign == nil, Date().timeIntervalSince(start) < 1.5 {

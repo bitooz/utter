@@ -77,9 +77,14 @@ enum DeliveryProbe {
             } else if !c.paste && now.kind != .notText {
                 line = "READ  \(c.name): \(now.summary) → would paste and, \(now.kind == .text ? "unless the field shows the text," : "with no field confirmed,") leave it on the clipboard (not pasted: the user's app)"
             } else {
+                let start = Date()
+                var pillEnd: TimeInterval?
                 let (how, whereTo) = await withCheckedContinuation { k in
-                    Controller.deliver(text, after: nil, target: target, now: now) { k.resume(returning: ($0, $1)) }
+                    Controller.deliver(text, after: nil, target: target, now: now, sent: { pillEnd = Date().timeIntervalSince(start) }) {
+                        k.resume(returning: ($0, $1))
+                    }
                 }
+                let settled = Date().timeIntervalSince(start)
                 await pause(0.6) // a landed paste puts the old clipboard back after 0.25 s
                 let clip = pb.string(forType: .string) ?? ""
                 var safe = how == .pasted ? clip == sentinel && !c.noField : clip == text
@@ -94,6 +99,8 @@ enum DeliveryProbe {
                 allSafe = allSafe && safe
                 line = "\(safe ? "PASS" : "FAIL")  \(c.name): \(how) · \(whereTo) · clipboard now \(clip == text ? "the test sentence" : clip == sentinel ? "the old clipboard (put back)" : "\"\(clip.prefix(40))\"")"
                 line += landed
+                // The pill ends at ⌘V (a paste) or at once (a copy); the check behind it may take up to 1.5 s more.
+                line += " · pill ended after \(Int((pillEnd ?? settled) * 1000)) ms, settled after \(Int(settled * 1000)) ms"
             }
             if c.pad != nil { for app in NSRunningApplication.runningApplications(withBundleIdentifier: c.bundle) { app.terminate() } }
             lines.append(line)

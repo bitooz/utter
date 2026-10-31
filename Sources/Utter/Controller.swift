@@ -280,11 +280,16 @@ final class Controller {
                     o.error = "focus left the target; not pasted"
                     return finish(id, o, pipeline: pipeline, mode: mode, keep: keep)
                 }
-                // The pill keeps writing until the text is seen in the field (or isn't, and stays on the clipboard).
-                Self.deliver(o.text, after: prev, target: target, now: now) { [weak self] how, whereTo in
+                // The pill ends as soon as ⌘V is sent; whether the text landed (and the clipboard comes back) is
+                // settled in the background, and only logged.
+                var pillEnded = false
+                Self.deliver(o.text, after: prev, target: target, now: now, sent: { [weak self] in
+                    pillEnded = true
+                    self?.endPill(o)
+                }) { [weak self] how, whereTo in
                     o.delivery = how
                     o.target = whereTo
-                    self?.finish(id, o, pipeline: pipeline, mode: mode, keep: keep)
+                    self?.finish(id, o, pipeline: pipeline, mode: mode, keep: keep, pillEnded: pillEnded)
                 }
             }
         }
@@ -293,8 +298,9 @@ final class Controller {
     /// Puts the text where the user was at release (`target`), given where the focus is now: pasted into a text field
     /// when it's still there, else left on the clipboard. A paste that isn't seen landing leaves it on the clipboard too.
     /// `done` (main thread) gets how it went and where, for the log.
+    /// `sent` comes once ⌘V is posted, before `done`, and only for a paste.
     static func deliver(_ text: String, after prev: Character?, target: Paster.Focus, now: Paster.Focus,
-                        done: @escaping (Delivery, String) -> Void) {
+                        sent: @escaping () -> Void = {}, done: @escaping (Delivery, String) -> Void) {
         if !now.isSame(as: target) {
             Paster.copy(text)
             done(.copiedFocusMoved, "\(target.summary) at release, now \(now.summary)")
@@ -302,7 +308,7 @@ final class Controller {
             Paster.copy(text)
             done(.copiedNoField, now.summary)
         } else {
-            Paster.paste(Paster.spaced(text, after: prev), into: now) { check in
+            Paster.paste(Paster.spaced(text, after: prev), into: now, sent: sent) { check in
                 switch check {
                 case .landed(let how): done(.pasted, "\(now.summary); \(how)")
                 case .unconfirmed(let why): done(.pastedUnconfirmed, "\(now.summary); not confirmed, left on the clipboard: \(why)")
@@ -311,7 +317,7 @@ final class Controller {
         }
     }
 
-    private func finish(_ id: Int, _ o: Outcome, pipeline: DictationPipeline, mode: Mode, keep: Bool) {
+    private func finish(_ id: Int, _ o: Outcome, pipeline: DictationPipeline, mode: Mode, keep: Bool, pillEnded: Bool = false) {
         lastOutcome = o
         let failed = o.error != nil && !o.error!.hasPrefix("focus")
         retryAudio = failed || o.gaps > 0 ? (pipeline.recording(), mode) : nil
@@ -331,17 +337,7 @@ final class Controller {
             }
             log("#\(id) \(how) \(o.text.count) chars, release→text \(ms(o.releaseToText)), audio \(String(format: "%.1f", o.audioSeconds))s, "
                 + "requests \(o.pieces)\(o.gaps > 0 ? ", \(o.gaps) part(s) missing" : "") · \(o.target)")
-            if isRecording {
-                hud.set(phase == .handsFree ? .handsFree : .listening)
-            } else if o.gaps > 0 {
-                hud.set(.notice(.partMissing))
-            } else if o.delivery == .copiedNoField {
-                hud.set(.notice(.copied))
-            } else if o.delivery == .copiedFocusMoved {
-                hud.set(.notice(.copiedFocusMoved))
-            } else {
-                hud.set(.hidden)
-            }
+            if !pillEnded { endPill(o) }
         }
         Stats.record(o)
         if keep { // failed ones too, but only when the user keeps recordings
@@ -351,6 +347,21 @@ final class Controller {
         onOutcome(o)
         NotificationCenter.default.post(name: .utterOutcome, object: o)
         onChange()
+    }
+
+    /// Ends the writing pill for text that was delivered: a symbol when there's something to know, else it just goes.
+    private func endPill(_ o: Outcome) {
+        if isRecording {
+            hud.set(phase == .handsFree ? .handsFree : .listening)
+        } else if o.gaps > 0 {
+            hud.set(.notice(.partMissing))
+        } else if o.delivery == .copiedNoField {
+            hud.set(.notice(.copied))
+        } else if o.delivery == .copiedFocusMoved {
+            hud.set(.notice(.copiedFocusMoved))
+        } else {
+            hud.set(.hidden)
+        }
     }
 
     /// Sends the last failed (or partly failed) dictation again, and puts the text where the focus is now.
