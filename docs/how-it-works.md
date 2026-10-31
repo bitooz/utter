@@ -1,6 +1,8 @@
-# Utter
+# How Utter works
 
-A Mac menu bar dictation app with four modes, each started by its own key. Hold a mode's key (**fn** for Auto by default)
+The details behind the [README](../README.md): how each part behaves, how it was measured, and the hidden settings.
+
+Utter is a Mac menu bar dictation app with four modes, each started by its own key. Hold a mode's key (**fn** for Auto by default)
 and talk, let go, and the text is pasted into the focused field. **Double-tap** the key for hands-free, then tap it once
 to finish. **Esc** cancels, while recording and while the text is on its way. Speech becomes text through a model on
 OpenRouter, on the user's own key.
@@ -148,7 +150,7 @@ Gemini 3.1 Flash-Lite, release 0.3 s after the last word, 2026-10-30 around 11:4
 | short (1.8–5.1 s, 8 clips) | 1 | 24 | 1015 ms (926–1459) | 1120–1230 ms (2.6 s clip) |
 | ~25 s (`mid25`, 23 s) | 1 | 3 | 1334 ms (1326–1982) | 1433–1570 ms |
 | ~70 s, paragraph pauses (`long70`, 66 s) | 2 | 5 | 1457 ms (1321–2160) | 1604–1752 ms |
-| ~75 s, pauses mid-sentence (`long70-midsentence`) | 3 | 5 | 1235 ms (1216–1523) | — |
+| ~75 s, pauses mid-sentence (`long70-midsentence`) | 3 | 5 | 1235 ms (1216–1523) | not run |
 
 Release-to-text is now the provider's own time for one request (racing three routes shaves a little off it).
 For long dictations only the last block is left at release, so they finish about as fast as a 25–35 s one.
@@ -157,7 +159,7 @@ For long dictations only the last block is left at release, so they finish about
 (177 and 209 words, 0 differences, all runs), so no words were dropped or doubled at the block joins.
 The 25 s clip has one miss in every run, "hotkey" heard as "hot", which a single request with the original WAV gets wrong too.
 
-**A real recording.** A 39 s dictation in the user's own voice (reference text in `bench/real/option-hold.txt`),
+**A real recording.** A 39 s dictation in the author's own voice (reference text in `bench/real/option-hold.txt`),
 run through the full pipeline and scored with `scripts/score.py` (word-level edit distance against the reference,
 case and punctuation ignored). 2026-10-30, around 12:30:
 
@@ -179,7 +181,7 @@ Old and new builds took turns on the same clips:
 | Balanced, 4 short clips, n=24 each | 2.30 s | 2.32 s |
 | Instant, 39 s recording, n=3 each | 1.92 s | 1.98 s |
 | Balanced, 39 s recording, single requests, n=16 / 20 | 3.90 s | 3.69 s |
-| Thorough (Gemini 4 Argon), 39 s recording, n=3 | — | 5.48 s (4.83–5.57), 3.6–4.5% words wrong |
+| Thorough (Gemini 4 Argon), 39 s recording, n=3 | not run | 5.48 s (4.83–5.57), 3.6–4.5% words wrong |
 
 Balanced came in at 5.4–10.8% words wrong and Instant at 11.7–25.2% in the same runs. That day 3.8 Flash refused the recording
 (content_filter) or stalled past 8 s in about a quarter of requests, on both builds alike; Instant's backup text was used then.
@@ -247,7 +249,9 @@ have unit tests: `swift test`.
 - `Sources/ObjCCatch`: turns AVAudioEngine's Objective-C exceptions into Swift errors, so a mic problem can't crash the app
 - `Sources/utter-bench`: latency benchmark
 - `Sources/TestPad`: self-test target window
-- `scripts/build.sh`: builds and signs the app bundles
+- `scripts/build.sh`: builds and signs the app bundles (version in `VERSION`, build number from `BUILD`)
+- `website/scripts/make-dmg.sh`: the universal, Developer ID signed, notarized `Utter.dmg`
+- `.github/workflows/release.yml`: runs `make-dmg.sh` on GitHub Actions and publishes the result as a GitHub Release
 - `scripts/probe.py`: quick per-provider latency probe
 - `scripts/compare.py`: word-for-word check of transcripts against `bench/scripts`
 - `scripts/score.py`: words-wrong rate against a reference text (`bench/real` holds references for real recordings)

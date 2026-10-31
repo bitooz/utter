@@ -7,7 +7,7 @@ Landing page for utter.filo.im with a Download button. Static files in `public/`
   (`public/_headers`). Pages takes files up to 25 MiB.
 - `scripts/make-dmg.sh` builds `public/Utter.dmg` (not in git): the app from `scripts/build.sh`, its binary rebuilt
   universal, signed with the Developer ID identity and the hardened runtime (microphone entitlement), notarized and
-  stapled, inside a disk image that is signed, notarized and stapled too. The notary key (Filo's App Store Connect API
+  stapled, inside a disk image that is signed, notarized and stapled too. The notary key (an App Store Connect API
   key) is read from `website/.release.env`, which isn't committed: `NOTARY_KEY_PATH`, `NOTARY_KEY_ID`, `NOTARY_ISSUER`.
 - Screenshots in `public/img/` come from the app's own capture (`Utter --capture-ui`), light and dark,
   shown by `prefers-color-scheme`. The icon is `design/icons/icon-cursor.png`.
